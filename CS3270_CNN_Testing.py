@@ -7,6 +7,10 @@ from torch.utils.data import DataLoader
 import os
 from PIL import Image
 import matplotlib.pyplot as plt
+import cv2
+
+
+
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,8 +34,8 @@ class CNN_Model(nn.Module):
             nn.Linear(16*55*55, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(256,3),
             nn.Dropout(0.5),
+            nn.Linear(256,2),
             nn.LogSoftmax(dim=1)
         )
 
@@ -43,7 +47,7 @@ class CNN_Model(nn.Module):
 
 
 model = CNN_Model().to(device)
-model.load_state_dict(torch.load("mnist_cnn_model.pth", map_location=device))
+model.load_state_dict(torch.load("cat_cnn.pth", map_location=device))
 model.eval()
 
 print("Model loaded successfully!")
@@ -55,23 +59,57 @@ transform = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-def predict_folder(folder_path):
-    for filename in os.listdir(folder_path):
-        if filename.endswith(('.png','.jpg','.jpeg')):
-            img = Image.open(os.path.join(folder_path, filename))
-            img = transform(img).unsqueeze(0).to(device)
 
+try:
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    while True:
+        ret, frame = cap.read()
+
+        if not ret:
+            print("Failed to stream")
+            break
+
+        # Convert OpenCV frame (BGR) to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Resize to match training input
+        gray = cv2.resize(gray, (224, 224))
+
+        # Convert to PyTorch tensor and normalize to [0, 1]
+        img = torch.from_numpy(gray).float().div(255.0)
+
+        # Add channel and batch dimensions: [1, 1, 224, 224]
+        img = img.unsqueeze(0).unsqueeze(0).to(device)
+
+        with torch.no_grad():
             output = model(img)
-            _, predicted = torch.max(output, 1)
+            probabilities = torch.exp(output)
+            confidence, predicted = torch.max(probabilities, 1)
 
-            print(f"{filename} -> Predicted Digit: {predicted.item()}")
+        predicted_class = predicted.item()
+        confidence_percent = confidence.item() * 100
 
-            img_display = img.squeeze().cpu().numpy()
+        # Display prediction on camera frame
+        cv2.putText(
+            frame,
+            f"Class: {predicted_class} | Confidence: {confidence_percent:.2f}%",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2
+        )
 
-            plt.figure()
-            plt.imshow(img_display, cmap='gray')
-            plt.title(f"Predicted class: {predicted.item()}")
-            plt.axis("off")
-            plt.show()
+        cv2.imshow("CNN Camera Prediction", frame)
 
-predict_folder("cats/TestCats")
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+#predict_folder("cats/TestCats")
